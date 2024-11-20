@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <map>
 #include <unordered_set>
+#include <deque>
 #define PORT 8080
 
 #define MAX_KEY_BYTE_PER_REQUEST 20
@@ -19,11 +20,15 @@
 using namespace std;
 
 typedef vector<string> val_t;
+struct addr{
+
+};
 
 class GTStoreClient {
 		private:
 				int client_id;
 				val_t value;
+				vector<char[MAX_KEY_BYTE_PER_REQUEST], addr> nodemap;
 		public:
 				void init(int id);
 				void finalize();
@@ -47,10 +52,11 @@ class GTStoreManager {
 		private:
 			int status;
 			// key to list of node id
-			unordered_map<char[MAX_KEY_BYTE_PER_REQUEST], vector<GTStoreStorage*>> key_node_map;
+			unordered_map<char[MAX_KEY_BYTE_PER_REQUEST], vector<addr>> key_node_map;
 
 			// easy to get top k storage node
-			map<int, GTStoreStorage*> vacant_storage;
+			unordered_map<addr, GTStoreStorage> addr_to_st;
+			deque<deque<addr>> vacant_storage;
 
 		public:
 				/** 
