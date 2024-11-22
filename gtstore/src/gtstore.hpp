@@ -1,31 +1,42 @@
-#ifndef GTSTORE
-#define GTSTORE
-
-#include <string>
-#include <cstdio>
-#include <cstdlib>
+#include "gtstore.hpp"
 #include <iostream>
+#include <thread>
 #include <vector>
-#include <unistd.h>
-#include <sys/wait.h>
 #include <unordered_map>
-#include <map>
-#include <unordered_set>
 #include <deque>
-#define PORT 8080
+#include <string>
+#include <sstream>
+#include <cstring>       // For char array operations
+#include <arpa/inet.h>   // For sockets
+#include <unistd.h>      // For close()
+#include <chrono>
+#include <mutex>
+#include <netinet/in.h>
+#include <errno.h>
 
-#define MAX_KEY_BYTE_PER_REQUEST 20
-#define MAX_VALUE_BYTE_PER_REQUEST 1000
+#define MANAGER_TCP_PORT 4000
+#define MANAGER_UDP_PORT 4001
+#define CLIENT_TCP_PORT 4002
+#define STORAGE_NODE_BASE_PORT 5000
+#define HEARTBEAT_INTERVAL 5       // seconds
+#define HEARTBEAT_TIMEOUT 10       // seconds
 
 using namespace std;
 
 typedef vector<string> val_t;
-struct addr{
+struct NodeAddress {
+    std::string ip;
+    int port;
 
+    bool operator==(const NodeAddress& other) const {
+        return ip == other.ip && port == other.port;
+    }
 };
 
 class GTStoreClient {
 		private:
+				int tcp_socket; 
+				int tcp_socket; 
 				int client_id;
 				val_t value;
 				vector<char[MAX_KEY_BYTE_PER_REQUEST], addr> nodemap;
@@ -49,53 +60,24 @@ class GTStoreClient {
 };
 
 class GTStoreManager {
-		private:
-			int status;
-			// key to list of node id
-			unordered_map<char[MAX_KEY_BYTE_PER_REQUEST], vector<addr>> key_node_map;
+	public:	
+		void init(int num_storage, int replica);
+	private:
+		void listen_heartbeat(NodeAddress node_addr);
+		void listen_request();
+		void put_request(int key, int val);
+		void get_request(int key);
+		void re_replicate(NodeAddress failed_node);
+		int flag;
+		int tcp_socket;
+		int client_tcp_socket;
+		int udp_socket;
+		int replica;
+		// unordered_map<NodeAddress, GTStoreStorage> addr_to_st;
+		deque<deque<NodeAddress>> vacant_storage;
+		unordered_map<int, vector<NodeAddress>> key_node_map;
 
-			// easy to get top k storage node
-			unordered_map<addr, GTStoreStorage> addr_to_st;
-			deque<deque<addr>> vacant_storage;
-
-		public:
-				/** 
-				 *  1. starting TCP amd UDP socket for manager storage communication
-				 *  2. create desginated number of GTStoreStorage, pass tcp and udp PORT to it, insert into storage map
-				 *  3. start heartbeat thread to receive heartbeat(UDP), start thread to receive get and put requests(TCP), 
-				 *  and start thread for listening for ack (UDP)
-				 * */ 
-				void init(int num_storage, int replica);
-				/**
-				 * 1. a loop to keep lisning to heartbeat, once heartbeat stop, call backup() to reduplicate data
-				 * 
-				 */
-				void listen_heartbeat();
-				/**
-				 * 1. listen to cleint's request
-				 * 
-				 */
-				void listen_request();
-				/**
-				 * 1. LB: find most vacant k nodes, update node map
-				 * 2. send TCP message to every selected node of key and value
-				 * 3. send message to client, indicating storage node
-				 */
-				void put_request(int key, int val);
-
-				/**
-				 * 1. Send TCP message of the map to client
-				 */
-				void get_request(int key);
-
-
-				/**
-				 * 1. delete node 
-				 * 2. create new replica
-				 * 3. send new map client
-				 */
-				void re_replicate();
-
+		mutex mtx;  // Mutex for thread safety
 };
 
 class GTStoreStorage {
