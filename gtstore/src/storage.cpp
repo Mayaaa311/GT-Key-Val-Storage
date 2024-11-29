@@ -26,10 +26,10 @@
 
 #define MANAGER_IP "127.0.0.1"
 
-void GTStoreStorage::init(int port) {
-    std::cout << "Inside GTStoreStorage::init() on port " << port << "\n";
-
-    // Start listening on TCP socket
+void GTStoreStorage::init(int port, int id) {
+    std::cout << "GTStoreStorage binding to " << port << "\n";
+	storage_id = id;
+		// Start listening on TCP socket
     tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (tcp_socket < 0) {
         std::cerr << "Error creating TCP socket" << std::endl;
@@ -47,7 +47,7 @@ void GTStoreStorage::init(int port) {
     storage_addr.sin_addr.s_addr = INADDR_ANY;
     storage_addr.sin_port = htons(port);
 
-    if (bind(tcp_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
+    if (::bind(tcp_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
         std::cerr << "Error binding TCP socket" << std::endl;
         exit(EXIT_FAILURE);
     }
@@ -80,21 +80,28 @@ void GTStoreStorage::init(int port) {
     }
 
     // Send storage node info to manager
-    // std::string registration_msg = "STORAGE_NODE_READY " + std::to_string(port);
-    // send(manager_socket, registration_msg.c_str(), registration_msg.size(), 0);
+    std::string registration_msg = "STORAGE_NODE_READY " + std::to_string(port);
+    send(manager_socket, registration_msg.c_str(), registration_msg.size(), 0);
     // close(manager_socket);
 
     // Keep manager socket open and start a listener thread
-    std::thread manager_thread(&GTStoreStorage::listen_to_manager, this, manager_socket);
-    manager_thread.detach();
+    // std::thread manager_thread(&GTStoreStorage::listen_to_manager, this, manager_socket);
+    // manager_thread.detach();
 
     // Start thread to send heartbeat messages
     std::thread heartbeat_thread(&GTStoreStorage::send_heartbeat, this);
     heartbeat_thread.detach();
 
-    // Start thread to accept connections
-    std::thread accept_thread(&GTStoreStorage::accept_connections, this);
-    accept_thread.detach();
+    while (true) {
+        int client_socket = accept(tcp_socket, NULL, NULL);
+        if (client_socket >= 0) {
+            // Start a new thread to handle the client request
+            std::thread client_thread(&GTStoreStorage::handle_client, this, client_socket);
+            client_thread.detach();
+        } else {
+            std::cerr << "Error accepting client connection: " << strerror(errno) << std::endl;
+        }
+    }
 }
 
 void GTStoreStorage::accept_connections() {
@@ -123,17 +130,32 @@ void GTStoreStorage::handle_client(int client_socket) {
             // Handle GET request
             get_request(client_socket, key);
         } 
+		else if (command == "PUT") {
+			// Handle PUT request
+			std::string value;
+			val_t vals;
+			while(iss >> value){
+				vals.push_back(value);
+			}
+			put_request(key, vals);
+			// Optionally send acknowledgment
+		} 
         else {
-            std::cerr << "Unknown command: " << command << std::endl;
+            std::cerr << "Unknown command from client: " << command << std::endl;
         }
     }
     close(client_socket);
 }
 
-void GTStoreStorage::put_request(std::string key, std::string value) {
+void GTStoreStorage::put_request(std::string key, val_t value) {
     std::lock_guard<std::mutex> lock(mtx);
     key_val_map[key] = value;
-    std::cout << "Stored key: " << key << " value: " << value << std::endl;
+	
+    std::cout << "Stored key: " << key << " value: ";
+	for(auto i : value){
+		cout<<i;
+	}
+	cout<<endl;
 }
 
 void GTStoreStorage::get_request(int client_socket, std::string key) {
@@ -141,8 +163,13 @@ void GTStoreStorage::get_request(int client_socket, std::string key) {
     auto it = key_val_map.find(key);
     if (it != key_val_map.end()) {
         // Send value back to client
-        std::string value = it->second;
-        send(client_socket, value.c_str(), value.size(), 0);
+        val_t value = it->second;
+
+		std::string msg = std::to_string(storage_id);
+		for(auto i : value){
+			msg+=" "+i;
+		}
+        send(client_socket, msg.c_str(), msg.size(), 0);
     } else {
         std::string response = "Error: Key not found";
         send(client_socket, response.c_str(), response.size(), 0);
@@ -193,12 +220,15 @@ void GTStoreStorage::listen_to_manager(int manager_socket) {
                 if (command == "PUT") {
                     // Handle PUT request
                     std::string value;
-                    getline(iss, value); // Get the rest of the line as value
-                    put_request(key, value);
+					val_t vals;
+					while(iss >> value){
+						vals.push_back(value);
+					}
+                    put_request(key, vals);
                     // Optionally send acknowledgment
                 } 
                 else {
-                    std::cerr << "Unknown command: " << command << std::endl;
+                    std::cerr << "Unknown command from manager:" << command <<"."<< std::endl;
                 }
             
             // Add logic to handle specific commands from the manager

@@ -4,10 +4,10 @@ void single_set_get(int client_id) {
 		cout << "Testing single set-get for GTStore by client " << client_id << ".\n";
 
 		GTStoreClient client;
-		client.init(client_id);
+		client.init();
 
 		string key = to_string(client_id);
-		vector<string> value;
+		val_t value;
 		value.push_back("phone");
 		value.push_back("phone_case");
 
