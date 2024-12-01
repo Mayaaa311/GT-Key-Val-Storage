@@ -272,19 +272,6 @@ void GTStoreManager::monitor_heartbeat(NodeAddress node_addr){
         if(cur_time-heartbeat_map[node_addr.id] > HEARTBEAT_INTERVAL*2){
             // Timeout occurred, assume node failure
             cerr << "Node failed: " << node_addr.id << endl;
-
-            // Handle node failure and remove it from vacant storage
-            for (auto i = vacant_storage.begin(); i != vacant_storage.end(); ++i) {
-                auto it = find(i->begin(), i->end(), node_addr);
-                if (it != i->end()) {
-                    i->erase(it);
-
-                    if (i->empty()) {
-                        vacant_storage.erase(i);
-                    }
-                    break;
-                }
-            }
             re_replicate(node_addr);
             return; // Exit the thread for this node
         } 
@@ -347,7 +334,28 @@ void GTStoreManager::listen_request() {
         
     }
 }
-
+NodeAddress GTStoreManager::select_node(){
+    if (!vacant_storage.empty()) {
+        NodeAddress node_addr = vacant_storage.front().front();
+        //check if there is only one node
+        if(vacant_storage.size() > 1 ||  vacant_storage.front().size() >1){
+            vacant_storage.front().pop_front();
+            //check if this node is the only node in previous queue
+            if (vacant_storage.front().empty()) {
+                vacant_storage.pop_front();
+            }
+            //check if all the node are currently in one queue
+            else if(vacant_storage.front() == vacant_storage.back()){
+                vacant_storage.push_back({});
+            }
+            vacant_storage.back().push_back(node_addr);
+            return node_addr;
+        }
+    } 
+    else {
+        return {"-1",-1,-1};
+    }
+}
 // Handle put request
 void GTStoreManager::put_request(std::string key, val_t val,int client_fd) {
     cout << "Handling PUT request for key: " << key << ", value starting with : " << val[0] << endl;
@@ -363,86 +371,66 @@ void GTStoreManager::put_request(std::string key, val_t val,int client_fd) {
     //TODO: Add case for changing value
     vector<NodeAddress> selected_nodes;
     // lock_guard<mutex> lock(mtx);
+
     if(key_node_map.find(key) != key_node_map.end()){
         selected_nodes = key_node_map[key];
     }
-    else{
-        for (int i = 0; i < replica; ++i) {
-            if (!vacant_storage.empty()) {
-                NodeAddress node_addr = vacant_storage.front().front();
-				selected_nodes.push_back(node_addr);
-                //check if there is only one node
-                if(vacant_storage.size() > 1 ||  vacant_storage.front().size() >1){
-                    vacant_storage.front().pop_front();
-                    //check if this node is the only node in previous queue
-                    if (vacant_storage.front().empty()) {
-                        vacant_storage.pop_front();
+    string response = "PUT_Success ";
+    for (int i = 0; i < replica; ++i) {
+        NodeAddress node_addr = select_node();
+
+        if(node_addr.id != -1){            
+            int storage_socket = socket(AF_INET, SOCK_STREAM, 0);
+            int retries = 0;
+
+            // Retry loop for creating the socket
+            while (storage_socket < 0 && retries < MAX_RETRIES) {
+                storage_socket = socket(AF_INET, SOCK_STREAM, 0);
+                if (storage_socket < 0) {
+                    std::cerr << "Error creating storage socket (attempt "
+                            << retries + 1 << "): " << strerror(errno) << std::endl;
+                    retries++;
+                    if (retries < MAX_RETRIES) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
                     }
-                    //check if all the node are currently in one queue
-                    else if(vacant_storage.front() == vacant_storage.back()){
-                        vacant_storage.push_back({});
-                    }
-                    vacant_storage.back().push_back(node_addr);
                 }
-            } 
-            else {
-                string response = "Error: No available storage nodes";
-                cerr<<response<<endl;
-                send(client_fd, response.c_str(), response.size(), 0);
-                close(client_fd);
-                return;
             }
+
+            // storage_socket = tcp_socket;
+
+            struct sockaddr_in storage_addr;
+            storage_addr.sin_family = AF_INET;
+            storage_addr.sin_port = htons(node_addr.port);
+            inet_pton(AF_INET, node_addr.ip.c_str(), &storage_addr.sin_addr);
+            if (connect(storage_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
+                cerr << "Error connecting to storage node :" << node_addr.id <<"  - "<<strerror(errno)<< endl;
+                showFDInfo1();
+                close(storage_socket);
+                i--;
+                continue;
+            }
+            else{
+                string storage_request = "PUT " + key;
+                for(auto i : val){
+                    storage_request+=" "+i;
+                }
+                send(storage_socket, storage_request.c_str(), storage_request.size(), 0);
+                close(storage_socket);
+
+                response+=to_string(node_addr.id)+" ";
+                selected_nodes.push_back(node_addr);
+            }
+        }        
+        else{
+            string response = "Error: Not enough storage nodes";
+            cerr<<response<<endl;
+            continue;
         }
     }
-
+    
     // Update key-node mapping
     key_node_map[key] = selected_nodes;
-	NodeAddress selected_node;
-	string response = "PUT_Success ";
-    // Send key-value pair to selected storage nodes
-    for (const auto& node_addr : selected_nodes) {
-		// cout<<"Puting node to storage ndoe: "<<node_addr.id<<endl;
-        // Establish TCP connection to storage node
 
-        // Send PUT request
-        int storage_socket = socket(AF_INET, SOCK_STREAM, 0);
-        int retries = 0;
-
-        // Retry loop for creating the socket
-        while (storage_socket < 0 && retries < MAX_RETRIES) {
-            storage_socket = socket(AF_INET, SOCK_STREAM, 0);
-            if (storage_socket < 0) {
-                std::cerr << "Error creating storage socket (attempt "
-                        << retries + 1 << "): " << strerror(errno) << std::endl;
-                retries++;
-                if (retries < MAX_RETRIES) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
-                }
-            }
-        }
-
-        // storage_socket = tcp_socket;
-
-        struct sockaddr_in storage_addr;
-        storage_addr.sin_family = AF_INET;
-        storage_addr.sin_port = htons(node_addr.port);
-        inet_pton(AF_INET, node_addr.ip.c_str(), &storage_addr.sin_addr);
-        if (connect(storage_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
-            cerr << "Error connecting to storage node :" << node_addr.id <<"  - "<<strerror(errno)<< endl;
-            showFDInfo1();
-            close(storage_socket);
-            return;
-        }
-
-        string storage_request = "PUT " + key;
-		for(auto i : val){
-			storage_request+=" "+i;
-		}
-        send(storage_socket, storage_request.c_str(), storage_request.size(), 0);
-        close(storage_socket);
-
-		response+=to_string(node_addr.id)+" ";
-    }
     cout<<"USING CLIENT SOCKET: "<<client_fd<<" to send: "<<response<<endl;
     send(client_fd, response.c_str(), response.size(), 0);
     close(client_fd);
@@ -486,7 +474,18 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
     cout << "Handling node failure and re-replication for node " << failed_node.ip << ":" << failed_node.port << endl;
 
     lock_guard<mutex> lock(mtx);
+    // Handle node failure and remove it from vacant storage
+    for (auto i = vacant_storage.begin(); i != vacant_storage.end(); ++i) {
+        auto it = find(i->begin(), i->end(), failed_node);
+        if (it != i->end()) {
+            i->erase(it);
 
+            if (i->empty()) {
+                vacant_storage.erase(i);
+            }
+            break;
+        }
+    }
     // Remove node from key_node_map
     for (auto& [key, nodes] : key_node_map) {
         auto it = find(nodes.begin(), nodes.end(), failed_node);
@@ -565,6 +564,7 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
                 inet_pton(AF_INET, new_node_addr.ip.c_str(), &new_storage_addr.sin_addr);
                 if (connect(new_node_socket, (struct sockaddr*)&new_storage_addr, sizeof(new_storage_addr)) < 0) {
                     cerr << "Error connecting to new storage node" << endl;
+
                     close(new_node_socket);
                     continue;
                 }

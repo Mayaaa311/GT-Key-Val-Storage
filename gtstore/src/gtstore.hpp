@@ -72,6 +72,7 @@ class GTStoreManager {
 		int tcp_socket;
 		int client_tcp_socket;
 		int udp_socket;
+		NodeAddress select_node();
 		int replica;
 		unordered_map<int,time_t> heartbeat_map;
 		deque<deque<NodeAddress>> vacant_storage;

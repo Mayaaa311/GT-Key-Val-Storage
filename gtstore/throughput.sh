@@ -5,7 +5,7 @@ make
 
 ./start_service --nodes 7 --rep 1 & 
 SERVICE_PID=$!
-sleep 5
+sleep 10
 # Launch the client testing app
 # Usage: ./test_app <test> <client_id>
 ./bin/test_app throughput 1 &

@@ -190,7 +190,6 @@ vector<int> GTStoreClient::put(const std::string& key, const val_t& value){
 	bool success = false;
     while (true) {
         ssize_t bytes_received = recv(manager_socket, buffer, sizeof(buffer) - 1, 0);
-        cout<<"FULL MESSAGE RECEIVED FROM MANAGER: "<<buffer<<endl;
         if (bytes_received < 0) {
             std::cerr << "Error receiving response from manager" << std::endl;
             break;
@@ -198,7 +197,7 @@ vector<int> GTStoreClient::put(const std::string& key, const val_t& value){
 
         if (bytes_received == 0) {
             // No more data, the connection is closed by the server
-            std::cerr << "Connection closed by manager" << std::endl;
+            std::cerr << "Connection closed by manager "<<strerror(errno) << std::endl;
             break;
         }
 
@@ -214,14 +213,9 @@ vector<int> GTStoreClient::put(const std::string& key, const val_t& value){
 
         if (status == "PUT_Success") {
             std::cout << "OK, server: ";
-            for(auto i : result){
-                cout<< i <<", ";
-            }
-            cout<<endl;
             success = true;
 
             // getline(iss >> std::ws, storage_ids); 
-            cout<<"Storage ID received: ";
             while(iss >> storage_ids){
                 cout<<storage_ids<<" , ";
                 result.push_back(stoi(storage_ids));

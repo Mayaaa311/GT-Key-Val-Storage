@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
 				single_set_get(client_id);
 		}
 		else if (string(argv[1]) ==  test2) {
-			throughput_test(200000,"throughput.csv",3);
+			throughput_test(200000,"throughput.csv",5);
 		}
 		else{
 			loadbalance_test(100000, "loadbalance.csv");
