@@ -3,6 +3,14 @@
 #include <arpa/inet.h> // For sockets
 #include <unistd.h> // For close()
 #include <iostream>
+#include <csignal> // For signal handling
+GTStoreManager manager; 
+
+void signal_handler(int signum) {
+    std::cout << "\nSignal " << signum << " received. Shutting down GTStoreManager..." << std::endl;
+    manager.shutdown_manager(); // Call the cleanup function
+    exit(EXIT_SUCCESS); // Exit the program gracefully
+}
 
 int main(int argc, char* argv[]) {
     // Default values for nodes and replicas
@@ -27,11 +35,15 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
+
+    // Register the signal handler
+    std::signal(SIGINT, signal_handler); // Handle Ctrl+C
+    std::signal(SIGTERM, signal_handler); // Handle termination signal
+
     // Initialize GTStoreManager
     cout << "Starting GTStoreManager with " << num_nodes 
          << " storage node(s) and " << num_replicas << " replica(s) per key." << endl;
 
-    GTStoreManager manager;
     manager.init(num_nodes, num_replicas);
 
     // Keep the main thread alive to manage the service

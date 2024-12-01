@@ -7,12 +7,14 @@
 #include <string.h> // For char array operations
 #include <arpa/inet.h> // For sockets
 #include <unistd.h> // For close()
-
+#include <ctime>
+#include <signal.h> // For kill()
 using namespace std;
 
 // Custom address structure
 
-
+#define MAX_RETRIES 5
+#define RETRY_DELAY_MS 100 // 100 milliseconds
 // Hash function for NodeAddress
 // namespace std {
 //     template <>
@@ -27,49 +29,11 @@ using namespace std;
 void GTStoreManager::init(int num_storage, int replica) {
     // -----------------Start TCP and UDP sockets for communication----------------------
     cout << "Initializing GTStoreManager with " << num_storage 
-        << " storage nodes and " << replica << " replicas per key." << endl;
+        << " storage nodes and " << replica << " replicas per key!!!!" << endl;
 
     this->replica = replica;
 	flag = 1;
-    // Initialize TCP socket
-    tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (tcp_socket < 0) {
-        cerr << "Error creating TCP socket" << endl;
-        exit(EXIT_FAILURE);
-    }
-
-    // Set socket options
-    int opt = 1;
-    if (setsockopt(tcp_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        cerr << "Error setting TCP socket options" << endl;
-        exit(EXIT_FAILURE);
-    }
-
-    // Bind TCP socket
-    struct sockaddr_in manager_addr;
-    memset(&manager_addr, 0, sizeof(manager_addr));
-    manager_addr.sin_family = AF_INET;
-    manager_addr.sin_addr.s_addr = INADDR_ANY; // Bind to any interface
-    manager_addr.sin_port = htons(MANAGER_TCP_PORT);
-
-    if (::bind(tcp_socket, (struct sockaddr*)&manager_addr, sizeof(manager_addr)) < 0) {
-        cerr << "Error binding TCP socket" << endl;
-        exit(EXIT_FAILURE);
-    }
-    // Set socket timeout
-    struct timeval timeout;
-    // timeout.tv_sec = 5;  // Timeout in seconds
-    // timeout.tv_usec = 0; // Timeout in microseconds
-    // if (setsockopt(tcp_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
-    //     std::cerr << "Error setting socket timeout" << std::endl;
-    // }
-	std::cout << "GTStoreManager binding to " << MANAGER_TCP_PORT << "\n";
-    // Listen on TCP socket
-    if (listen(tcp_socket, 5) < 0) {
-        cerr << "Error listening on TCP socket" << endl;
-        exit(EXIT_FAILURE);
-    }
-
+	int opt = 1;
     // -----------------Start TCP and UDP sockets for client communication----------------------
 
     // Initialize TCP socket
@@ -96,18 +60,19 @@ void GTStoreManager::init(int num_storage, int replica) {
     client_addr.sin_port = htons(CLIENT_TCP_PORT);
 
     if (::bind(client_tcp_socket, (struct sockaddr*)&client_addr, sizeof(client_addr)) < 0) {
-        cerr << "Error binding TCP socket" << endl;
+        cerr << "Error binding TCP socket for client tcp" << endl;
         exit(EXIT_FAILURE);
     }
-	 std::cout << "GTStoreManager binding to " << CLIENT_TCP_PORT << "\n";
 
     // Listen on TCP socket
     if (listen(client_tcp_socket, 5) < 0) {
         cerr << "Error listening on TCP socket" << endl;
         exit(EXIT_FAILURE);
     }
-
+    std::cout << "GTStoreManager TCP for client binding to " << CLIENT_TCP_PORT << " for socket "<<client_tcp_socket<<"\n";
+    
     // Initialize UDP socket------------------------------------------------------------------
+	struct sockaddr_in manager_addr;
     udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
     if (udp_socket < 0) {
         cerr << "Error creating UDP socket" << endl;
@@ -119,45 +84,106 @@ void GTStoreManager::init(int num_storage, int replica) {
     manager_addr.sin_family = AF_INET;
     manager_addr.sin_addr.s_addr = INADDR_ANY;
     manager_addr.sin_port = htons(MANAGER_UDP_PORT);
+	std::cout << "GTStoreManager UDP for heartbeat binding to " << MANAGER_UDP_PORT << "\n";
+	opt = 1;
+	if (setsockopt(udp_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+		cerr << "Error setting UDP socket options" << endl;
+		exit(EXIT_FAILURE);
+	}
 
     if (::bind(udp_socket, (struct sockaddr*)&manager_addr, sizeof(manager_addr)) < 0) {
-        cerr << "Error binding UDP socket" << endl;
+        cerr << "Error binding UDP socket: " << strerror(errno) << endl;
         exit(EXIT_FAILURE);
     }
-	std::cout << "GTStoreManager binding to " << MANAGER_UDP_PORT << "\n";
-
     // Create storage nodes--------------------------------------------------------------------
+
+    thread listen_heartbeat_thread(&GTStoreManager::listen_heartbeat, this);
+    listen_heartbeat_thread.detach();
+
+
+
 	int base_port = STORAGE_NODE_BASE_PORT;
 	vacant_storage.push_back({});
-	for (int i = 0; i < num_storage; ++i) {
+    vector<int> storage_sockets;
+    cout<<"--------------------------------------------------------"<<endl;
+    cout<<"--------------------------------------------------------"<<endl;
+    int strgid = 1;
+	for (int i = 0; i < num_storage*2; i+=2) {
 		pid_t pid = fork();
 	
 		if (pid < 0) {
-			std::cerr << "Error: Failed to fork process for storage node " << i << std::endl;
+			std::cerr << "Error: Failed to fork process for storage node " << strgid << std::endl;
 			exit(EXIT_FAILURE);
-		} else if (pid == 0) {
+		} 
+        else if (pid == 0) { 
 			// Child process: Initialize and run the storage node
-    		std::cout << "Child Process (PID: " << getpid() << ") started for storage node with ID " << i << std::endl;
-
+    		std::cout << "Child Process (PID: " << getpid() << ") started for storage node with ID " << strgid << std::endl;
 			int storage_port = base_port + i;
 			GTStoreStorage storage_node;
-			storage_node.init(storage_port, i);
+			storage_node.init(storage_port, strgid);
 
 			exit(0); // Exit the child process after storage node execution
-		} else {
+		} 
+        else {
+
+            sleep(1);
 			// Parent process: Track the storage node
-			int storage_port = base_port + i;
-			NodeAddress node_addr = {"127.0.0.1", storage_port, i};
+            int storage_manager_port = base_port + i;
+            int storage_client_port = base_port + i + 1;
+            
+            NodeAddress node_addr = {"127.0.0.1", storage_manager_port,storage_client_port,strgid, -1};
 
+            
+
+            int storage_socket = socket(AF_INET, SOCK_STREAM, 0);
+            int retries = 0;
+
+            // Retry loop for creating the socket
+            while (storage_socket < 0 && retries < MAX_RETRIES) {
+                storage_socket = socket(AF_INET, SOCK_STREAM, 0);
+                if (storage_socket < 0) {
+                    std::cerr << "Error creating storage socket (attempt "
+                            << retries + 1 << "): " << strerror(errno) << std::endl;
+                    retries++;
+                    if (retries < MAX_RETRIES) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
+                    }
+                }
+            }
+
+            // storage_socket = tcp_socket;
+
+            struct sockaddr_in storage_addr;
+            storage_addr.sin_family = AF_INET;
+            storage_addr.sin_port = htons(node_addr.storage_manager_port);
+            inet_pton(AF_INET, node_addr.ip.c_str(), &storage_addr.sin_addr);
+            if (connect(storage_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
+                cerr << "Error connecting to storage node :" << node_addr.id << endl;
+                close(storage_socket);
+                return;
+            }
+			
+			node_addr.socket = storage_socket;
+            storage_sockets.push_back(storage_socket);
+            cout<<"Manager just connected to storage: "<<node_addr.id<<endl;
+            cout<<"Storage manager communicating using port: "<<node_addr.storage_manager_port<<endl;
+            cout<<"Storage client communicating using port: "<<node_addr.storage_client_port<<endl;
+            cout<<"Storage manager communicating using socket: "<<node_addr.socket<<endl;
+            cout<<"--------------------------------------------------------"<<endl;
+            cout<<"--------------------------------------------------------"<<endl;
+
+
+
+            forked_processes.push_back(pid);
 			// Start a thread to monitor this node's heartbeat
-			thread heartbeat_thread(&GTStoreManager::listen_heartbeat, this, node_addr);
-			heartbeat_thread.detach();
-			cout<<"node added to vacant strg"<<endl;
-			// Add to vacant storage
-			vacant_storage.back().push_back(node_addr);
+			time_t last_beat = time(nullptr);
+            heartbeat_map[node_addr.id] = last_beat;
+            vacant_storage.back().push_back(node_addr);
+            thread monitor_heartbeat_thread(&GTStoreManager::monitor_heartbeat, this, node_addr);
+            monitor_heartbeat_thread.detach();	
 
-			// Continue to the next storage node
 		}
+        strgid++;
 	}
 
     // Create GTStoreStorage instances and store them in addr_to_st
@@ -170,63 +196,68 @@ void GTStoreManager::init(int num_storage, int replica) {
 
     // Detach threads
     request_thread.detach();
+
+
+
+    while(flag == 1){
+        sleep(5);
+    }
+
+    for(auto socket: storage_sockets){
+
+        close(socket);
+    }
+
 }
-
-// Heartbeat listening loop
-void GTStoreManager::listen_heartbeat(NodeAddress node_addr) {
-    // cout << "Listening for heartbeats from storage nodes..." << endl;
-
-    // UDP listening loop to monitor heartbeat messages
-    // If a node's heartbeat stops, trigger backup and call re_replicate()
-    cout << "Listening for heartbeat from node " << node_addr.ip << ":" << node_addr.port << endl;
-
-    char buffer[2048];
+void GTStoreManager::listen_heartbeat(){
+    char buffer[1024];
     struct sockaddr_in storage_addr;
     socklen_t addr_len = sizeof(storage_addr);
 
-    // Set timeout for recvfrom
-    // struct timeval tv;
-    // tv.tv_sec = 5;
-    // tv.tv_usec = 0;
-    // setsockopt(udp_socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
+    time_t cur_beat;
     while (flag == 1) {
         int bytes_received = recvfrom(udp_socket, buffer, sizeof(buffer), 0,
                                       (struct sockaddr*)&storage_addr, &addr_len);
-
+            cur_beat = time(nullptr); 
         if (bytes_received > 0) {
             // Successfully received heartbeat
-            cout << "Heartbeat received from " << node_addr.ip << ":" << node_addr.port << endl;
-        } else {
-            if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                // Timeout occurred, assume node failure
-                cerr << "Node failed: " << node_addr.ip << ":" << node_addr.port << endl;
+            int cur_id = std::stoi(buffer);
+            heartbeat_map[cur_id] = cur_beat;
 
-                // loop through vacant storage and delete the dead node
-                for(auto i = vacant_storage.begin(); i!= vacant_storage.end();i++
-                ){
-                    auto it = find(i->begin(), i->end(), node_addr);
-                    if(it != i->end()){
-                        i->erase(it);
+            // cout << "Heartbeat received from " << cur_id << endl;
 
 
-                        if(i->empty()){
-                            vacant_storage.erase(i);
-                        }
-                        break;
-                    }
-                }
-                re_replicate(node_addr);
-                return; // Exit the thread for this node
-            } else {
-                cerr << "Error receiving heartbeat from " << node_addr.ip << ":" << node_addr.port
-                     << ": " << strerror(errno) << endl;
-                return; // Exit the thread for this node
-            }
-        }
+        } 
     }
-    
 }
+void GTStoreManager::monitor_heartbeat(NodeAddress node_addr){
+    time_t cur_time= time(nullptr);
+    while(flag == 1){
+        cur_time= time(nullptr);
+        if(cur_time-heartbeat_map[node_addr.id] > HEARTBEAT_INTERVAL*2){
+            // Timeout occurred, assume node failure
+            cerr << "Node failed: " << node_addr.id << endl;
+
+            // Handle node failure and remove it from vacant storage
+            for (auto i = vacant_storage.begin(); i != vacant_storage.end(); ++i) {
+                auto it = find(i->begin(), i->end(), node_addr);
+                if (it != i->end()) {
+                    i->erase(it);
+
+                    if (i->empty()) {
+                        vacant_storage.erase(i);
+                    }
+                    break;
+                }
+            }
+            re_replicate(node_addr);
+            return; // Exit the thread for this node
+        } 
+        // cout<<"heartbeat interval; "<<heartbeat_map[node_addr.id]- cur_time<<endl;
+        this_thread::sleep_for(chrono::seconds(1));
+    }
+}
+
 
 // Client request listener
 void GTStoreManager::listen_request() {
@@ -235,22 +266,20 @@ void GTStoreManager::listen_request() {
     cout << "Listening for client requests..." << endl;
 
     while (flag == 1) {
-		// cout<<"before accept"<<endl;
         int client_fd = accept(client_tcp_socket, NULL, NULL);
-		// cout<<"after accept"<<endl;
         if (client_fd >= 0) {
             // Start a new thread to handle the client request
             thread client_thread([this, client_fd]() {
                 char request_buffer[2048];
                 ssize_t bytes_read = recv(client_fd, request_buffer, sizeof(request_buffer) - 1,0);
                 if (bytes_read > 0) {
+                    cout<<"RECEIVED msg in manager from client: "<<request_buffer<<" in socket: "<<client_fd<<endl;
                     // Null-terminate the buffer
                     request_buffer[bytes_read] = '\0';
                     // Parse the request
                     string request(request_buffer);
                     istringstream iss(request);
                     string request_type;
-					cout<<"Got message from client: "<<request<<endl;
                     iss >> request_type;
                     if (request_type == "PUT") {
                         // Extract key and value
@@ -261,7 +290,7 @@ void GTStoreManager::listen_request() {
 						while(iss >> val){
 							vals.push_back(val);
 						}
-                        this->put_request(key, vals,client_fd);
+                        this->put_request(key, vals, client_fd);
                     } else if (request_type == "GET") {
                         string key;
                         iss >> key;
@@ -272,6 +301,7 @@ void GTStoreManager::listen_request() {
                         string response = "Error: Unknown request type";
                         cerr<<response<<endl;
                     }
+                    cout<<"--------------------------------------------------------"<<endl;
                 }
                 
             });
@@ -279,6 +309,7 @@ void GTStoreManager::listen_request() {
         } else {
             // cerr << "Error accepting client connection: " << strerror(errno) << endl;
         }
+        
     }
 }
 
@@ -303,7 +334,6 @@ void GTStoreManager::put_request(std::string key, val_t val,int client_fd) {
     else{
         for (int i = 0; i < replica; ++i) {
             if (!vacant_storage.empty()) {
-				
                 NodeAddress node_addr = vacant_storage.front().front();
 				selected_nodes.push_back(node_addr);
                 //check if there is only one node
@@ -324,6 +354,7 @@ void GTStoreManager::put_request(std::string key, val_t val,int client_fd) {
                 string response = "Error: No available storage nodes";
                 cerr<<response<<endl;
                 send(client_fd, response.c_str(), response.size(), 0);
+                close(client_fd);
                 return;
             }
         }
@@ -337,39 +368,28 @@ void GTStoreManager::put_request(std::string key, val_t val,int client_fd) {
     for (const auto& node_addr : selected_nodes) {
 		// cout<<"Puting node to storage ndoe: "<<node_addr.id<<endl;
         // Establish TCP connection to storage node
-        int storage_socket = socket(AF_INET, SOCK_STREAM, 0);
-		// storage_socket = tcp_socket;
 
-        if (storage_socket < 0) {
-            cerr << "Error creating storage socket" << endl;
-            continue;
-        }
-        struct sockaddr_in storage_addr;
-        storage_addr.sin_family = AF_INET;
-        storage_addr.sin_port = htons(node_addr.port);
-        inet_pton(AF_INET, node_addr.ip.c_str(), &storage_addr.sin_addr);
-        if (connect(storage_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
-            cerr << "Error connecting to storage node " << node_addr.ip << ":" << node_addr.port << endl;
-            close(storage_socket);
-            continue;
-        }
         // Send PUT request
+        int storage_socket = node_addr.socket;
         string storage_request = "PUT " + key;
 		for(auto i : val){
 			storage_request+=" "+i;
 		}
+        cout<<"USING STORAGE SOCKET: "<<node_addr.socket<<" for STORAGE: "<<node_addr.id<<"when sending put to storage "<<storage_request<<endl;
         send(storage_socket, storage_request.c_str(), storage_request.size(), 0);
-        close(storage_socket);
+        // close(storage_socket);
+
 		response+=to_string(node_addr.id)+" ";
     }
-    cout << response<<endl; 
+    cout<<"USING CLIENT SOCKET: "<<client_fd<<" to send: "<<response<<endl;
     send(client_fd, response.c_str(), response.size(), 0);
-	close(client_fd);
+    close(client_fd);
+	
 }
 
 // Handle get request
 void GTStoreManager::get_request(std::string key,int client_fd) {
-    cout << "Handling GET request for key: " << key << endl;
+    cout << "MANAGER: Handling GET request for key: " << key << endl;
 
     // Look up key in key_node_map to find associated storage nodes
     // Send storage node information to the client via TCP
@@ -381,12 +401,11 @@ void GTStoreManager::get_request(std::string key,int client_fd) {
         // Serialize the vector of NodeAddress into a string
         string response;
         for (const auto& node : storage_nodes) {
-            response += node.ip + " " + to_string(node.port) + " " + to_string(node.id) +"\n"; // Format: IP:PORT
+            response += node.ip + " " + to_string(node.storage_client_port) + " " + to_string(node.id) +"\n"; // Format: IP:PORT
         }
-		cout<<"Before Sent "<<response<<"to client"<<endl;
         // Send the serialized vector to the client
         send(client_fd, response.c_str(), response.size(), 0);
-		cout<<"Sent "<<response<<"to client"<<endl;
+         cout<<"GET: MANAGER JUST SEND RESPONSE TO CLIENT in handling: "<<response<<endl;
     } 
     else {
         // Key not found
@@ -401,7 +420,7 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
     // Identify failed node(s) and remove them from key_node_map
     // Create new replicas for lost data
     // Notify the client about updated key-node mappings
-    cout << "Handling node failure and re-replication for node " << failed_node.ip << ":" << failed_node.port << endl;
+    cout << "Handling node failure and re-replication for node " << failed_node.id << endl;
 
     lock_guard<mutex> lock(mtx);
 
@@ -450,16 +469,7 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
                 NodeAddress existing_node_addr = nodes.front();
 
                 // Retrieve value from an existing node
-                int existing_node_socket = socket(AF_INET, SOCK_STREAM, 0);
-                struct sockaddr_in existing_storage_addr;
-                existing_storage_addr.sin_family = AF_INET;
-                existing_storage_addr.sin_port = htons(existing_node_addr.port);
-                inet_pton(AF_INET, existing_node_addr.ip.c_str(), &existing_storage_addr.sin_addr);
-                if (connect(existing_node_socket, (struct sockaddr*)&existing_storage_addr, sizeof(existing_storage_addr)) < 0) {
-                    cerr << "Error connecting to existing storage node" << endl;
-                    close(existing_node_socket);
-                    continue;
-                }
+                int existing_node_socket = existing_node_addr.socket;
 
                 // Send GET request
                 string storage_request = "GET " + key;
@@ -476,16 +486,7 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
                 value_buffer[bytes_read] = '\0';
 
                 // Send PUT request to new node
-                int new_node_socket = socket(AF_INET, SOCK_STREAM, 0);
-                struct sockaddr_in new_storage_addr;
-                new_storage_addr.sin_family = AF_INET;
-                new_storage_addr.sin_port = htons(new_node_addr.port);
-                inet_pton(AF_INET, new_node_addr.ip.c_str(), &new_storage_addr.sin_addr);
-                if (connect(new_node_socket, (struct sockaddr*)&new_storage_addr, sizeof(new_storage_addr)) < 0) {
-                    cerr << "Error connecting to new storage node" << endl;
-                    close(new_node_socket);
-                    continue;
-                }
+                int new_node_socket = new_node_addr.socket;
 
                 string put_request = "PUT " + key + " " + string(value_buffer);
                 send(new_node_socket, put_request.c_str(), put_request.size(), 0);
@@ -499,3 +500,25 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
 
 
 
+void GTStoreManager::shutdown_manager() {
+    flag = 0; // Set the flag to stop loops
+    if (client_tcp_socket >= 0) {
+        close(client_tcp_socket);
+        cout << "Closed client TCP socket." << endl;
+    }
+    if (udp_socket >= 0) {
+        close(udp_socket);
+        cout << "Closed UDP socket." << endl;
+    }
+    // Terminate all forked processes
+    for (pid_t pid : forked_processes) {
+        if (pid > 0) { // Check for a valid PID
+            cout << "Terminating child process with PID: " << pid << endl;
+            if (kill(pid, SIGTERM) == 0) {
+                cout << "Successfully terminated process " << pid << endl;
+            } else {
+                cerr << "Failed to terminate process " << pid << ": " << strerror(errno) << endl;
+            }
+        }
+    }
+}

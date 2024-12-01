@@ -8,8 +8,8 @@ SRC_DIR = src
 OBJ_DIR = obj
 
 # Define targets
-SERVER = $(BIN_DIR)/start_service
-CLIENT = $(BIN_DIR)/client
+SERVER =start_service
+CLIENT = client
 TEST_APP = $(BIN_DIR)/test_app
 
 # Source files for each target

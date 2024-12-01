@@ -13,12 +13,10 @@
 #include <netinet/in.h>
 #include <errno.h>
 
-#define MANAGER_TCP_PORT 4000
-#define MANAGER_UDP_PORT 4001
-#define CLIENT_TCP_PORT 4002
-#define STORAGE_NODE_BASE_PORT 4005
-#define HEARTBEAT_INTERVAL 5       // seconds
-#define HEARTBEAT_TIMEOUT 10       // seconds
+#define MANAGER_UDP_PORT 8001
+#define CLIENT_TCP_PORT 8002
+#define STORAGE_NODE_BASE_PORT 8005
+#define HEARTBEAT_INTERVAL 2      // seconds
 
 using namespace std;
 
@@ -34,11 +32,13 @@ typedef vector<string> val_t;
 // }
 struct NodeAddress {
     std::string ip;
-    int port;
+    int storage_manager_port;
+	int storage_client_port;
 	int id;
+	int socket;
 
     bool operator==(const NodeAddress& other) const {
-        return ip == other.ip && port == other.port;
+        return id == other.id;
     }
 };
 
@@ -48,7 +48,7 @@ class GTStoreClient {
 				unordered_map<string, NodeAddress> nodemap;
 		public:
 			string get(const std::string& key); 
-			bool put(const std::string& key, const val_t& value); 
+			vector<int> put(const std::string& key, const val_t& value); 
 
 			void init();
 			void finalize();
@@ -57,18 +57,22 @@ class GTStoreClient {
 class GTStoreManager {
 	public:	
 		void init(int num_storage, int replica);
-		
+		void shutdown_manager();
+
 	private:
-		void listen_heartbeat(NodeAddress node_addr);
+		void listen_heartbeat();
+		void monitor_heartbeat(NodeAddress node_addr);
 		void listen_request();
 		void put_request(std::string key, val_t val,int c);
 		void get_request(std::string key,int c);
 		void re_replicate(NodeAddress failed_node);
+		vector<pid_t> forked_processes;
 		int flag;
 		int tcp_socket;
 		int client_tcp_socket;
 		int udp_socket;
 		int replica;
+		unordered_map<int,time_t> heartbeat_map;
 		deque<deque<NodeAddress>> vacant_storage;
 		unordered_map<std::string, vector<NodeAddress>> key_node_map;
 
@@ -80,6 +84,7 @@ class GTStoreStorage {
 			unordered_map<string, val_t> key_val_map;
 			int storage_id;
 			int tcp_socket;
+			int tcp_socket_client;
 			mutex mtx;  // Mutex for thread safety
 			int running;
 		public:
@@ -92,8 +97,8 @@ class GTStoreStorage {
 				void get_request(int client_socket, std::string key);
 				void listen_to_manager(int manager_socket);
 				void send_heartbeat();
-				void accept_connections();
-				void handle_client(int client_socket);
+				void accept_connections(int socket);
+				void handle_client(int client_socket, bool close_conn);
 
 };
 

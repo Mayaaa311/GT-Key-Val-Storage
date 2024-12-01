@@ -31,11 +31,9 @@ string GTStoreClient::get(const std::string& key) {
         close(manager_socket);
         return value;
     }
-	cout<< "Client binding to: " << CLIENT_TCP_PORT<<std::endl;
-
     // Connect to manager
     if (connect(manager_socket, (struct sockaddr*)&manager_addr, sizeof(manager_addr)) < 0) {
-        std::cerr << "Connection to manager failed" << std::endl;
+        std::cerr << "Connection to manager failed, try to get: " <<key<< std::endl;
         close(manager_socket);
         return value;
     }
@@ -52,7 +50,7 @@ string GTStoreClient::get(const std::string& key) {
     char buffer[2048];
     ssize_t bytes_received = recv(manager_socket, buffer, sizeof(buffer) - 1, 0);
     if (bytes_received <= 0) {
-        std::cerr << "Failed to receive response from manager" << std::endl;
+        std::cerr << "Failed to receive response from manager, try to get: "<<key << std::endl;
         close(manager_socket);
         return value;
     }
@@ -69,7 +67,7 @@ string GTStoreClient::get(const std::string& key) {
         int storage_port;
 		int storage_id;
         if (line_stream >> storage_ip >> storage_port >> storage_id) {
-            storage_nodes.push_back({storage_ip, storage_port, storage_id});
+            storage_nodes.push_back({storage_ip,-1, storage_port, storage_id, -1});
         }
     }
 
@@ -78,35 +76,35 @@ string GTStoreClient::get(const std::string& key) {
         return value;
     }
 	else{
-		cout<<"querying storage nodes:";
-		for(auto i: storage_nodes){
-			cout<<i.id<<",";
-		}
-		cout<<endl;
+		// cout<<"querying storage nodes:";
+		// for(auto i: storage_nodes){
+		// 	cout<<i.id<<",";
+		// }
+		// cout<<endl;
 	}
     while (!storage_nodes.empty()) {
-        NodeAddress storage_node = storage_nodes.back();
-        storage_nodes.pop_back();
+        NodeAddress storage_node = storage_nodes.front();
+        storage_nodes.erase(storage_nodes.begin());
 
         // Connect to storage node
         int storage_socket = socket(AF_INET, SOCK_STREAM, 0);
         if (storage_socket < 0) {
-            std::cerr << "Error creating socket for storage node: " << storage_node.ip << ":" << storage_node.port << std::endl;
+            std::cerr << "Error creating socket for storage node: " << storage_node.ip << ":" << storage_node.storage_client_port << std::endl;
             continue; // Try the next node
         }
 
         struct sockaddr_in storage_addr;
         memset(&storage_addr, 0, sizeof(storage_addr));
         storage_addr.sin_family = AF_INET;
-        storage_addr.sin_port = htons(storage_node.port);
+        storage_addr.sin_port = htons(storage_node.storage_client_port);
         if (inet_pton(AF_INET, storage_node.ip.c_str(), &storage_addr.sin_addr) <= 0) {
-            std::cerr << "Invalid address for storage node: " << storage_node.ip << ":" << storage_node.port << std::endl;
+            std::cerr << "Invalid address for storage node: " << storage_node.ip << ":" << storage_node.storage_client_port << std::endl;
             close(storage_socket);
             continue; // Try the next node
         }
 
         if (connect(storage_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
-            std::cerr << "Connection to storage node failed: " << storage_node.ip << ":" << storage_node.port << std::endl;
+            std::cerr << "Connection to storage node failed: " << storage_node.ip << ":" << storage_node.storage_client_port << std::endl;
             close(storage_socket);
             continue; // Try the next node
         }
@@ -114,7 +112,7 @@ string GTStoreClient::get(const std::string& key) {
         // Send GET request to storage node
         request = "GET " + key;
         if (send(storage_socket, request.c_str(), request.size(), 0) < 0) {
-            std::cerr << "Failed to send GET request to storage node: " << storage_node.ip << ":" << storage_node.port << std::endl;
+            std::cerr << "Failed to send GET request to storage node: " << storage_node.ip << ":" << storage_node.storage_client_port << std::endl;
             close(storage_socket);
             continue; // Try the next node
         }
@@ -122,7 +120,7 @@ string GTStoreClient::get(const std::string& key) {
         // Receive value from storage node
         bytes_received = recv(storage_socket, buffer, sizeof(buffer) - 1, 0);
         if (bytes_received <= 0) {
-            std::cerr << "Failed to receive value from storage node: " << storage_node.ip << ":" << storage_node.port << std::endl;
+            std::cerr << "Failed to receive value from storage node: " << storage_node.ip << ":" << storage_node.storage_client_port << std::endl;
             close(storage_socket);
             continue; // Try the next node
         }
@@ -143,15 +141,15 @@ string GTStoreClient::get(const std::string& key) {
     return value;
 }
 
-bool GTStoreClient::put(const std::string& key, const val_t& value){
-
+vector<int> GTStoreClient::put(const std::string& key, const val_t& value){
+    vector<int> result;
     // std::cout << "Inside GTStoreClient::put() for client: " << " key: " << key << " first value: " << value[0] << "\n";
 
     // Create TCP socket to manager
     int manager_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (manager_socket < 0) {
         std::cerr << "Error creating socket to manager" << std::endl;
-        return false;
+        return {};
     }
 
     // Set up manager address
@@ -165,15 +163,14 @@ bool GTStoreClient::put(const std::string& key, const val_t& value){
     if (inet_pton(AF_INET, MANAGER_IP, &manager_addr.sin_addr) <= 0) {
         std::cerr << "Invalid address for manager" << std::endl;
         close(manager_socket);
-        return false;
+        return {};
     }
 
-	cout<< "Client binding to: " << CLIENT_TCP_PORT<<" in put "<<std::endl;
     // Connect to manager
     if (connect(manager_socket, (struct sockaddr*)&manager_addr, sizeof(manager_addr)) < 0) {
         std::cerr << "Connection to manager failed" << std::endl;
         close(manager_socket);
-        return false;
+        return {};
     }
 
 
@@ -182,22 +179,18 @@ bool GTStoreClient::put(const std::string& key, const val_t& value){
 	for (auto i : value){
 		request+=" " + i;
 	}
-
-	cout<<"Client sending: "<<request<<endl;
     if (send(manager_socket, request.c_str(), request.size(), 0) < 0) {
         std::cerr << "Failed to send PUT request to manager" << std::endl;
         close(manager_socket);
-        return false;
+        return {};
     }
 
     // Receive response from manager
     char buffer[2048];
 	bool success = false;
-	cout<<"smt"<<endl;
     while (true) {
         ssize_t bytes_received = recv(manager_socket, buffer, sizeof(buffer) - 1, 0);
-		cout<<"here"<<endl;
-
+        cout<<"FULL MESSAGE RECEIVED FROM MANAGER: "<<buffer<<endl;
         if (bytes_received < 0) {
             std::cerr << "Error receiving response from manager" << std::endl;
             break;
@@ -216,13 +209,24 @@ bool GTStoreClient::put(const std::string& key, const val_t& value){
         std::istringstream iss(response);
         std::string status, storage_ip;
         string storage_ids;
+        
         iss >> status;
-		getline(iss >> std::ws, storage_ids); 
-
 
         if (status == "PUT_Success") {
-            std::cout << "OK, server" << storage_ids << std::endl;
+            std::cout << "OK, server: ";
+            for(auto i : result){
+                cout<< i <<", ";
+            }
+            cout<<endl;
             success = true;
+
+            // getline(iss >> std::ws, storage_ids); 
+            cout<<"Storage ID received: ";
+            while(iss >> storage_ids){
+                cout<<storage_ids<<" , ";
+                result.push_back(stoi(storage_ids));
+            }
+            cout<<endl;
             break;
         } else {
             std::cerr << "Manager responded with error: " << response << std::endl;
@@ -231,7 +235,7 @@ bool GTStoreClient::put(const std::string& key, const val_t& value){
     }
 
     close(manager_socket);
-    return success;
+    return result;
 }
 
 void GTStoreClient::finalize() {

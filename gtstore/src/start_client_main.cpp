@@ -40,7 +40,7 @@ int main(int argc, char* argv[]) {
 			vals.push_back(val);
 		}
 		
-        if (client.put(key, vals)) {
+        if (!client.put(key, vals).empty()) {
         } else {
             std::cerr << "PUT request failed." << std::endl;
         }
