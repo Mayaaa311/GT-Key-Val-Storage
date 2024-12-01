@@ -12,13 +12,16 @@
 #include <mutex>
 #include <netinet/in.h>
 #include <errno.h>
-
+#include <fcntl.h>  
 #define MANAGER_UDP_PORT 8001
 #define CLIENT_TCP_PORT 8002
 #define STORAGE_NODE_BASE_PORT 8005
 #define HEARTBEAT_INTERVAL 2      // seconds
 
 using namespace std;
+
+
+
 
 typedef vector<string> val_t;
 // Hash function for NodeAddress
@@ -32,10 +35,8 @@ typedef vector<string> val_t;
 // }
 struct NodeAddress {
     std::string ip;
-    int storage_manager_port;
-	int storage_client_port;
+    int port;
 	int id;
-	int socket;
 
     bool operator==(const NodeAddress& other) const {
         return id == other.id;
@@ -84,7 +85,6 @@ class GTStoreStorage {
 			unordered_map<string, val_t> key_val_map;
 			int storage_id;
 			int tcp_socket;
-			int tcp_socket_client;
 			mutex mtx;  // Mutex for thread safety
 			int running;
 		public:
@@ -98,7 +98,7 @@ class GTStoreStorage {
 				void listen_to_manager(int manager_socket);
 				void send_heartbeat();
 				void accept_connections(int socket);
-				void handle_client(int client_socket, bool close_conn);
+				void handle_client(int client_socket);
 
 };
 

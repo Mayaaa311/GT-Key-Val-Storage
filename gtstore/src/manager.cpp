@@ -9,21 +9,86 @@
 #include <unistd.h> // For close()
 #include <ctime>
 #include <signal.h> // For kill()
+#include <fcntl.h>    // Required for fcntl and FD_CLOEXEC
 using namespace std;
 
 // Custom address structure
 
 #define MAX_RETRIES 5
 #define RETRY_DELAY_MS 100 // 100 milliseconds
-// Hash function for NodeAddress
-// namespace std {
-//     template <>
-//     struct hash<NodeAddress> {
-//         std::size_t operator()(const NodeAddress& k) const {
-//             return std::hash<std::string>()(k.ip) ^ (std::hash<int>()(k.port) << 1);
-//         }
-//     };
-// }
+
+
+
+typedef int s32;   // or
+
+void showFDInfo( s32 fd )
+{
+   char buf[256];
+
+   s32 fd_flags = fcntl( fd, F_GETFD ); 
+   if ( fd_flags == -1 ) return;
+
+   s32 fl_flags = fcntl( fd, F_GETFL ); 
+   if ( fl_flags == -1 ) return;
+
+   char path[256];
+   sprintf( path, "/proc/self/fd/%d", fd );
+
+   memset( &buf[0], 0, 256 );
+   ssize_t s = readlink( path, &buf[0], 256 );
+   if ( s == -1 )
+   {
+        cerr << " (" << path << "): " << "not available";
+        return;
+   }
+   cerr << fd << " (" << buf << "): ";
+
+   if ( fd_flags & FD_CLOEXEC )  cerr << "cloexec ";
+
+   // file status
+   if ( fl_flags & O_APPEND   )  cerr << "append ";
+   if ( fl_flags & O_NONBLOCK )  cerr << "nonblock ";
+
+   // acc mode
+   if ( fl_flags & O_RDONLY   )  cerr << "read-only ";
+   if ( fl_flags & O_RDWR     )  cerr << "read-write ";
+   if ( fl_flags & O_WRONLY   )  cerr << "write-only ";
+
+   if ( fl_flags & O_DSYNC    )  cerr << "dsync ";
+//    if ( fl_flags & O_RSYNC    )  cerr << "rsync ";
+   if ( fl_flags & O_SYNC     )  cerr << "sync ";
+
+   struct flock fl;
+   fl.l_type = F_WRLCK;
+   fl.l_whence = 0;
+   fl.l_start = 0;
+   fl.l_len = 0;
+   fcntl( fd, F_GETLK, &fl );
+   if ( fl.l_type != F_UNLCK )
+   {
+      if ( fl.l_type == F_WRLCK )
+         cerr << "write-locked";
+      else
+         cerr << "read-locked";
+      cerr << "(pid:" << fl.l_pid << ") ";
+   }
+}
+
+void showFDInfo1()
+{
+   s32 numHandles = getdtablesize();
+
+   for ( s32 i = 0; i < numHandles; i++ )
+   {
+      s32 fd_flags = fcntl( i, F_GETFD ); 
+      if ( fd_flags == -1 ) continue;
+
+
+      showFDInfo(i);
+   }
+}
+
+
 
 // Constructor and initialization method
 void GTStoreManager::init(int num_storage, int replica) {
@@ -37,7 +102,7 @@ void GTStoreManager::init(int num_storage, int replica) {
     // -----------------Start TCP and UDP sockets for client communication----------------------
 
     // Initialize TCP socket
-    client_tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
+    client_tcp_socket = socket(AF_INET, SOCK_STREAM , 0);
     if (client_tcp_socket < 0) {
         cerr << "Error creating TCP socket" << endl;
         exit(EXIT_FAILURE);
@@ -47,6 +112,18 @@ void GTStoreManager::init(int num_storage, int replica) {
     if (setsockopt(client_tcp_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         cerr << "Error setting TCP socket options" << endl;
         exit(EXIT_FAILURE);
+    }
+
+    int flags = fcntl(client_tcp_socket, F_GETFD);
+    if (flags == -1) {
+        std::cerr << "Error getting socket flags" << std::endl;
+        return ;
+    }
+
+    flags |= FD_CLOEXEC;
+    if (fcntl(client_tcp_socket, F_SETFD, flags) == -1) {
+        std::cerr << "Error setting FD_CLOEXEC" << std::endl;
+        return ;
     }
 
     // if (setsockopt(client_tcp_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
@@ -128,51 +205,9 @@ void GTStoreManager::init(int num_storage, int replica) {
 
             sleep(1);
 			// Parent process: Track the storage node
-            int storage_manager_port = base_port + i;
-            int storage_client_port = base_port + i + 1;
+            int storage_TCP_port = base_port + i;
             
-            NodeAddress node_addr = {"127.0.0.1", storage_manager_port,storage_client_port,strgid, -1};
-
-            
-
-            int storage_socket = socket(AF_INET, SOCK_STREAM, 0);
-            int retries = 0;
-
-            // Retry loop for creating the socket
-            while (storage_socket < 0 && retries < MAX_RETRIES) {
-                storage_socket = socket(AF_INET, SOCK_STREAM, 0);
-                if (storage_socket < 0) {
-                    std::cerr << "Error creating storage socket (attempt "
-                            << retries + 1 << "): " << strerror(errno) << std::endl;
-                    retries++;
-                    if (retries < MAX_RETRIES) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
-                    }
-                }
-            }
-
-            // storage_socket = tcp_socket;
-
-            struct sockaddr_in storage_addr;
-            storage_addr.sin_family = AF_INET;
-            storage_addr.sin_port = htons(node_addr.storage_manager_port);
-            inet_pton(AF_INET, node_addr.ip.c_str(), &storage_addr.sin_addr);
-            if (connect(storage_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
-                cerr << "Error connecting to storage node :" << node_addr.id << endl;
-                close(storage_socket);
-                return;
-            }
-			
-			node_addr.socket = storage_socket;
-            storage_sockets.push_back(storage_socket);
-            cout<<"Manager just connected to storage: "<<node_addr.id<<endl;
-            cout<<"Storage manager communicating using port: "<<node_addr.storage_manager_port<<endl;
-            cout<<"Storage client communicating using port: "<<node_addr.storage_client_port<<endl;
-            cout<<"Storage manager communicating using socket: "<<node_addr.socket<<endl;
-            cout<<"--------------------------------------------------------"<<endl;
-            cout<<"--------------------------------------------------------"<<endl;
-
-
+            NodeAddress node_addr = {"127.0.0.1", storage_TCP_port, strgid};
 
             forked_processes.push_back(pid);
 			// Start a thread to monitor this node's heartbeat
@@ -370,14 +405,41 @@ void GTStoreManager::put_request(std::string key, val_t val,int client_fd) {
         // Establish TCP connection to storage node
 
         // Send PUT request
-        int storage_socket = node_addr.socket;
+        int storage_socket = socket(AF_INET, SOCK_STREAM, 0);
+        int retries = 0;
+
+        // Retry loop for creating the socket
+        while (storage_socket < 0 && retries < MAX_RETRIES) {
+            storage_socket = socket(AF_INET, SOCK_STREAM, 0);
+            if (storage_socket < 0) {
+                std::cerr << "Error creating storage socket (attempt "
+                        << retries + 1 << "): " << strerror(errno) << std::endl;
+                retries++;
+                if (retries < MAX_RETRIES) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
+                }
+            }
+        }
+
+        // storage_socket = tcp_socket;
+
+        struct sockaddr_in storage_addr;
+        storage_addr.sin_family = AF_INET;
+        storage_addr.sin_port = htons(node_addr.port);
+        inet_pton(AF_INET, node_addr.ip.c_str(), &storage_addr.sin_addr);
+        if (connect(storage_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
+            cerr << "Error connecting to storage node :" << node_addr.id <<"  - "<<strerror(errno)<< endl;
+            showFDInfo1();
+            close(storage_socket);
+            return;
+        }
+
         string storage_request = "PUT " + key;
 		for(auto i : val){
 			storage_request+=" "+i;
 		}
-        cout<<"USING STORAGE SOCKET: "<<node_addr.socket<<" for STORAGE: "<<node_addr.id<<"when sending put to storage "<<storage_request<<endl;
         send(storage_socket, storage_request.c_str(), storage_request.size(), 0);
-        // close(storage_socket);
+        close(storage_socket);
 
 		response+=to_string(node_addr.id)+" ";
     }
@@ -401,7 +463,7 @@ void GTStoreManager::get_request(std::string key,int client_fd) {
         // Serialize the vector of NodeAddress into a string
         string response;
         for (const auto& node : storage_nodes) {
-            response += node.ip + " " + to_string(node.storage_client_port) + " " + to_string(node.id) +"\n"; // Format: IP:PORT
+            response += node.ip + " " + to_string(node.port) + " " + to_string(node.id) +"\n"; // Format: IP:PORT
         }
         // Send the serialized vector to the client
         send(client_fd, response.c_str(), response.size(), 0);
@@ -413,6 +475,7 @@ void GTStoreManager::get_request(std::string key,int client_fd) {
         cerr<<response<<endl;
         send(client_fd, response.c_str(), response.size(), 0);
     }
+    close(client_fd);
 }
 
 // Handle node failure and replication
@@ -420,7 +483,7 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
     // Identify failed node(s) and remove them from key_node_map
     // Create new replicas for lost data
     // Notify the client about updated key-node mappings
-    cout << "Handling node failure and re-replication for node " << failed_node.id << endl;
+    cout << "Handling node failure and re-replication for node " << failed_node.ip << ":" << failed_node.port << endl;
 
     lock_guard<mutex> lock(mtx);
 
@@ -469,7 +532,16 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
                 NodeAddress existing_node_addr = nodes.front();
 
                 // Retrieve value from an existing node
-                int existing_node_socket = existing_node_addr.socket;
+                int existing_node_socket = socket(AF_INET, SOCK_STREAM, 0);
+                struct sockaddr_in existing_storage_addr;
+                existing_storage_addr.sin_family = AF_INET;
+                existing_storage_addr.sin_port = htons(existing_node_addr.port);
+                inet_pton(AF_INET, existing_node_addr.ip.c_str(), &existing_storage_addr.sin_addr);
+                if (connect(existing_node_socket, (struct sockaddr*)&existing_storage_addr, sizeof(existing_storage_addr)) < 0) {
+                    cerr << "Error connecting to existing storage node" << endl;
+                    close(existing_node_socket);
+                    continue;
+                }
 
                 // Send GET request
                 string storage_request = "GET " + key;
@@ -486,7 +558,16 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
                 value_buffer[bytes_read] = '\0';
 
                 // Send PUT request to new node
-                int new_node_socket = new_node_addr.socket;
+                int new_node_socket = socket(AF_INET, SOCK_STREAM, 0);
+                struct sockaddr_in new_storage_addr;
+                new_storage_addr.sin_family = AF_INET;
+                new_storage_addr.sin_port = htons(new_node_addr.port);
+                inet_pton(AF_INET, new_node_addr.ip.c_str(), &new_storage_addr.sin_addr);
+                if (connect(new_node_socket, (struct sockaddr*)&new_storage_addr, sizeof(new_storage_addr)) < 0) {
+                    cerr << "Error connecting to new storage node" << endl;
+                    close(new_node_socket);
+                    continue;
+                }
 
                 string put_request = "PUT " + key + " " + string(value_buffer);
                 send(new_node_socket, put_request.c_str(), put_request.size(), 0);
@@ -497,7 +578,6 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
         }
     }
 }
-
 
 
 void GTStoreManager::shutdown_manager() {

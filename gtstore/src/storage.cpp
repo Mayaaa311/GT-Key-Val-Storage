@@ -57,56 +57,13 @@ void GTStoreStorage::init(int port, int id) {
     }
     std::cout << "GTStoreStorage"<<id<<" bineded to " << port << "\n";
 
-    		// Start listening on TCP socket
-    tcp_socket_client = socket(AF_INET, SOCK_STREAM, 0);
-    if (tcp_socket_client < 0) {
-        std::cerr << "Error creating TCP socket" << std::endl;
-        exit(EXIT_FAILURE);
-    }
-    opt = 1;
-    if (setsockopt(tcp_socket_client, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        std::cerr << "Error setting socket options" << std::endl;
-        exit(EXIT_FAILURE);
-    }
-
-    memset(&storage_addr, 0, sizeof(storage_addr));
-    storage_addr.sin_family = AF_INET;
-    storage_addr.sin_addr.s_addr = INADDR_ANY;
-    storage_addr.sin_port = htons(port+1);
-
-    if (::bind(tcp_socket_client, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
-        std::cerr << "Error binding TCP socket" << std::endl;
-        exit(EXIT_FAILURE);
-    }
-
-    if (listen(tcp_socket_client, 5) < 0) {
-        std::cerr << "Error listening on TCP socket" << std::endl;
-        exit(EXIT_FAILURE);
-    }
-    std::cout << "GTStoreStorage"<<id<<" bineded to " << port+1 << " for client communication\n";
-    // // Send message to manager to inform that storage node is ready
-
-
-
 
     // Start thread to send heartbeat messages
     std::thread heartbeat_thread(&GTStoreStorage::send_heartbeat, this);
     heartbeat_thread.detach();
 
-    thread client_connection(&GTStoreStorage::accept_connections,this, tcp_socket_client);
-    client_connection.detach();
-
-    int manager_socket = accept(tcp_socket, NULL, NULL);
-    cout<<"Manager sockected connected by storage "<<storage_id<<" socket number: "<<manager_socket<<endl;
-    if (manager_socket >= 0) {
-        // // Start a new thread to handle the client request
-        while(true){
-            handle_client(manager_socket,false);
-        }
-    } else {
-        std::cerr << "Error accepting client connection: " << strerror(errno) << std::endl;
-    }
-    close(manager_socket);
+    accept_connections(tcp_socket);
+    close(tcp_socket);
 
 
 
@@ -114,10 +71,10 @@ void GTStoreStorage::init(int port, int id) {
 
 void GTStoreStorage::accept_connections(int socket) {
     while (true) {
-        int client_socket = accept(tcp_socket_client, NULL, NULL);
+        int client_socket = accept(socket, NULL, NULL);
         if (client_socket >= 0) {
             // Start a new thread to handle the client request
-            std::thread client_thread(&GTStoreStorage::handle_client, this, client_socket, true);
+            std::thread client_thread(&GTStoreStorage::handle_client, this, client_socket);
             client_thread.detach();
         } else {
             std::cerr << "Error accepting client connection: " << strerror(errno) << std::endl;
@@ -125,7 +82,7 @@ void GTStoreStorage::accept_connections(int socket) {
     }
 }
 
-void GTStoreStorage::handle_client(int client_socket, bool close_conn) {
+void GTStoreStorage::handle_client(int client_socket) {
     char buffer[2048];
     ssize_t bytes_read = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
     if (bytes_read > 0) {
@@ -152,8 +109,7 @@ void GTStoreStorage::handle_client(int client_socket, bool close_conn) {
             std::cerr << "Unknown command from client: " << command << std::endl;
         }
     }
-    if (close_conn)
-        close(client_socket);
+    close(client_socket);
 }
 
 void GTStoreStorage::put_request(std::string key, val_t value) {

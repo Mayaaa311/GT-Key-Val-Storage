@@ -67,7 +67,7 @@ string GTStoreClient::get(const std::string& key) {
         int storage_port;
 		int storage_id;
         if (line_stream >> storage_ip >> storage_port >> storage_id) {
-            storage_nodes.push_back({storage_ip,-1, storage_port, storage_id, -1});
+            storage_nodes.push_back({storage_ip, storage_port, storage_id});
         }
     }
 
@@ -89,22 +89,22 @@ string GTStoreClient::get(const std::string& key) {
         // Connect to storage node
         int storage_socket = socket(AF_INET, SOCK_STREAM, 0);
         if (storage_socket < 0) {
-            std::cerr << "Error creating socket for storage node: " << storage_node.ip << ":" << storage_node.storage_client_port << std::endl;
+            std::cerr << "Error creating socket for storage node: " << storage_node.ip << ":" << storage_node.port << std::endl;
             continue; // Try the next node
         }
 
         struct sockaddr_in storage_addr;
         memset(&storage_addr, 0, sizeof(storage_addr));
         storage_addr.sin_family = AF_INET;
-        storage_addr.sin_port = htons(storage_node.storage_client_port);
+        storage_addr.sin_port = htons(storage_node.port);
         if (inet_pton(AF_INET, storage_node.ip.c_str(), &storage_addr.sin_addr) <= 0) {
-            std::cerr << "Invalid address for storage node: " << storage_node.ip << ":" << storage_node.storage_client_port << std::endl;
+            std::cerr << "Invalid address for storage node: " << storage_node.ip << ":" << storage_node.port << std::endl;
             close(storage_socket);
             continue; // Try the next node
         }
 
         if (connect(storage_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
-            std::cerr << "Connection to storage node failed: " << storage_node.ip << ":" << storage_node.storage_client_port << std::endl;
+            std::cerr << "Connection to storage node failed: " << storage_node.ip << ":" << storage_node.port << std::endl;
             close(storage_socket);
             continue; // Try the next node
         }
@@ -112,7 +112,7 @@ string GTStoreClient::get(const std::string& key) {
         // Send GET request to storage node
         request = "GET " + key;
         if (send(storage_socket, request.c_str(), request.size(), 0) < 0) {
-            std::cerr << "Failed to send GET request to storage node: " << storage_node.ip << ":" << storage_node.storage_client_port << std::endl;
+            std::cerr << "Failed to send GET request to storage node: " << storage_node.ip << ":" << storage_node.port << std::endl;
             close(storage_socket);
             continue; // Try the next node
         }
@@ -120,7 +120,7 @@ string GTStoreClient::get(const std::string& key) {
         // Receive value from storage node
         bytes_received = recv(storage_socket, buffer, sizeof(buffer) - 1, 0);
         if (bytes_received <= 0) {
-            std::cerr << "Failed to receive value from storage node: " << storage_node.ip << ":" << storage_node.storage_client_port << std::endl;
+            std::cerr << "Failed to receive value from storage node: " << storage_node.ip << ":" << storage_node.port << std::endl;
             close(storage_socket);
             continue; // Try the next node
         }
