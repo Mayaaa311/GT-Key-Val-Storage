@@ -116,11 +116,11 @@ void GTStoreStorage::put_request(std::string key, val_t value) {
     std::lock_guard<std::mutex> lock(mtx);
     key_val_map[key] = value;
 	
-    std::cout << "FROM STORAGE "<<storage_id<<"-------------Stored key: " << key << " value: ";
-	for(auto i : value){
-		cout<<i;
-	}
-	cout<<endl;
+    // std::cout << "FROM STORAGE "<<storage_id<<"-------------Stored key: " << key << " value: ";
+	// for(auto i : value){
+	// 	cout<<i;
+	// }
+	// cout<<endl;
 }
 
 void GTStoreStorage::get_request(int client_socket, std::string key) {
@@ -187,6 +187,7 @@ void GTStoreStorage::listen_to_manager(int manager_socket) {
                 std::string request(buffer);
                 std::istringstream iss(request);
                 std::string command, key;
+                // cout<<"STORAGE RECEIVED PUT REQUEST: "<<request<<endl;
                 iss >> command >> key;
                 if (command == "PUT") {
                     // Handle PUT request

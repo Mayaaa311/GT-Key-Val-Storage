@@ -37,8 +37,8 @@ int main(int argc, char* argv[]) {
 
 
     // Register the signal handler
-    std::signal(SIGINT, signal_handler); // Handle Ctrl+C
-    std::signal(SIGTERM, signal_handler); // Handle termination signal
+    // std::signal(SIGINT, signal_handler); // Handle Ctrl+C
+    // std::signal(SIGTERM, signal_handler); // Handle termination signal
 
     // Initialize GTStoreManager
     cout << "Starting GTStoreManager with " << num_nodes 

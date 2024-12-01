@@ -18,78 +18,6 @@ using namespace std;
 #define RETRY_DELAY_MS 100 // 100 milliseconds
 
 
-
-typedef int s32;   // or
-
-void showFDInfo( s32 fd )
-{
-   char buf[256];
-
-   s32 fd_flags = fcntl( fd, F_GETFD ); 
-   if ( fd_flags == -1 ) return;
-
-   s32 fl_flags = fcntl( fd, F_GETFL ); 
-   if ( fl_flags == -1 ) return;
-
-   char path[256];
-   sprintf( path, "/proc/self/fd/%d", fd );
-
-   memset( &buf[0], 0, 256 );
-   ssize_t s = readlink( path, &buf[0], 256 );
-   if ( s == -1 )
-   {
-        cerr << " (" << path << "): " << "not available";
-        return;
-   }
-   cerr << fd << " (" << buf << "): ";
-
-   if ( fd_flags & FD_CLOEXEC )  cerr << "cloexec ";
-
-   // file status
-   if ( fl_flags & O_APPEND   )  cerr << "append ";
-   if ( fl_flags & O_NONBLOCK )  cerr << "nonblock ";
-
-   // acc mode
-   if ( fl_flags & O_RDONLY   )  cerr << "read-only ";
-   if ( fl_flags & O_RDWR     )  cerr << "read-write ";
-   if ( fl_flags & O_WRONLY   )  cerr << "write-only ";
-
-   if ( fl_flags & O_DSYNC    )  cerr << "dsync ";
-//    if ( fl_flags & O_RSYNC    )  cerr << "rsync ";
-   if ( fl_flags & O_SYNC     )  cerr << "sync ";
-
-   struct flock fl;
-   fl.l_type = F_WRLCK;
-   fl.l_whence = 0;
-   fl.l_start = 0;
-   fl.l_len = 0;
-   fcntl( fd, F_GETLK, &fl );
-   if ( fl.l_type != F_UNLCK )
-   {
-      if ( fl.l_type == F_WRLCK )
-         cerr << "write-locked";
-      else
-         cerr << "read-locked";
-      cerr << "(pid:" << fl.l_pid << ") ";
-   }
-}
-
-void showFDInfo1()
-{
-   s32 numHandles = getdtablesize();
-
-   for ( s32 i = 0; i < numHandles; i++ )
-   {
-      s32 fd_flags = fcntl( i, F_GETFD ); 
-      if ( fd_flags == -1 ) continue;
-
-
-      showFDInfo(i);
-   }
-}
-
-
-
 // Constructor and initialization method
 void GTStoreManager::init(int num_storage, int replica) {
     // -----------------Start TCP and UDP sockets for communication----------------------
@@ -338,7 +266,7 @@ NodeAddress GTStoreManager::select_node(){
     if (!vacant_storage.empty()) {
         NodeAddress node_addr = vacant_storage.front().front();
         //check if there is only one node
-        if(vacant_storage.size() > 1 ||  vacant_storage.front().size() >1){
+        if(vacant_storage.size() > 1 ||  vacant_storage.front().size() >1){ //---------------------------------------
             vacant_storage.front().pop_front();
             //check if this node is the only node in previous queue
             if (vacant_storage.front().empty()) {
@@ -351,14 +279,17 @@ NodeAddress GTStoreManager::select_node(){
             vacant_storage.back().push_back(node_addr);
             return node_addr;
         }
+        else {
+            return node_addr;
+        }
     } 
-    else {
-        return {"-1",-1,-1};
-    }
+
+    return {"-1",-1,-1};
+
 }
-// Handle put request
+
 void GTStoreManager::put_request(std::string key, val_t val,int client_fd) {
-    cout << "Handling PUT request for key: " << key << ", value starting with : " << val[0] << endl;
+    cout << "PUT: Handling PUT request for key: " << key << ", value starting with : " << val[0] << endl;
 
     // Load balancing: Find the most vacant nodes from vacant_storage
     // Update key_node_map with selected storage nodes
@@ -371,67 +302,71 @@ void GTStoreManager::put_request(std::string key, val_t val,int client_fd) {
     //TODO: Add case for changing value
     vector<NodeAddress> selected_nodes;
     // lock_guard<mutex> lock(mtx);
-
     if(key_node_map.find(key) != key_node_map.end()){
         selected_nodes = key_node_map[key];
     }
-    string response = "PUT_Success ";
-    for (int i = 0; i < replica; ++i) {
-        NodeAddress node_addr = select_node();
-
-        if(node_addr.id != -1){            
-            int storage_socket = socket(AF_INET, SOCK_STREAM, 0);
-            int retries = 0;
-
-            // Retry loop for creating the socket
-            while (storage_socket < 0 && retries < MAX_RETRIES) {
-                storage_socket = socket(AF_INET, SOCK_STREAM, 0);
-                if (storage_socket < 0) {
-                    std::cerr << "Error creating storage socket (attempt "
-                            << retries + 1 << "): " << strerror(errno) << std::endl;
-                    retries++;
-                    if (retries < MAX_RETRIES) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
-                    }
-                }
-            }
-
-            // storage_socket = tcp_socket;
-
-            struct sockaddr_in storage_addr;
-            storage_addr.sin_family = AF_INET;
-            storage_addr.sin_port = htons(node_addr.port);
-            inet_pton(AF_INET, node_addr.ip.c_str(), &storage_addr.sin_addr);
-            if (connect(storage_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
-                cerr << "Error connecting to storage node :" << node_addr.id <<"  - "<<strerror(errno)<< endl;
-                showFDInfo1();
-                close(storage_socket);
-                i--;
-                continue;
-            }
+    else{
+        for (int i = 0; i < replica; ++i) {
+            NodeAddress selection = select_node();
+            if(selection.id != -1)
+                selected_nodes.push_back(selection);
             else{
-                string storage_request = "PUT " + key;
-                for(auto i : val){
-                    storage_request+=" "+i;
-                }
-                send(storage_socket, storage_request.c_str(), storage_request.size(), 0);
-                close(storage_socket);
-
-                response+=to_string(node_addr.id)+" ";
-                selected_nodes.push_back(node_addr);
+                string response = "Error: Not enough storage nodes";
+                cerr<<response<<endl;
+                break;
             }
-        }        
-        else{
-            string response = "Error: Not enough storage nodes";
-            cerr<<response<<endl;
-            continue;
         }
     }
-    
+
     // Update key-node mapping
     key_node_map[key] = selected_nodes;
+	NodeAddress selected_node;
+	string response = "PUT_Success ";
+    // Send key-value pair to selected storage nodes
+    for (const auto& node_addr : selected_nodes) {
+		// cout<<"Puting node to storage ndoe: "<<node_addr.id<<endl;
+        // Establish TCP connection to storage node
 
-    cout<<"USING CLIENT SOCKET: "<<client_fd<<" to send: "<<response<<endl;
+        // Send PUT request
+        int storage_socket = socket(AF_INET, SOCK_STREAM, 0);
+        int retries = 0;
+
+        // Retry loop for creating the socket
+        while (storage_socket < 0 && retries < MAX_RETRIES) {
+            storage_socket = socket(AF_INET, SOCK_STREAM, 0);
+            if (storage_socket < 0) {
+                std::cerr << "Error creating storage socket (attempt "
+                        << retries + 1 << "): " << strerror(errno) << std::endl;
+                retries++;
+                if (retries < MAX_RETRIES) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
+                }
+            }
+        }
+
+        // storage_socket = tcp_socket;
+
+        struct sockaddr_in storage_addr;
+        storage_addr.sin_family = AF_INET;
+        storage_addr.sin_port = htons(node_addr.port);
+        inet_pton(AF_INET, node_addr.ip.c_str(), &storage_addr.sin_addr);
+        while (connect(storage_socket, (struct sockaddr*)&storage_addr, sizeof(storage_addr)) < 0) {
+            cerr << "Error connecting to storage node :" << node_addr.id <<"  - "<<strerror(errno)<< endl;
+            re_replicate(node_addr);
+            close(storage_socket);
+            continue;
+        }
+
+        string storage_request = "PUT " + key;
+		for(auto i : val){
+			storage_request+=" "+i;
+		}
+        send(storage_socket, storage_request.c_str(), storage_request.size(), 0);
+        close(storage_socket);
+
+		response+=to_string(node_addr.id)+" ";
+    }
+    cout<<"PUT: Sent response to client send: "<<response<<endl;
     send(client_fd, response.c_str(), response.size(), 0);
     close(client_fd);
 	
@@ -455,7 +390,7 @@ void GTStoreManager::get_request(std::string key,int client_fd) {
         }
         // Send the serialized vector to the client
         send(client_fd, response.c_str(), response.size(), 0);
-         cout<<"GET: MANAGER JUST SEND RESPONSE TO CLIENT in handling: "<<response<<endl;
+         cout<<"GET: Sent node list to client: "<<response<<endl;
     } 
     else {
         // Key not found
@@ -471,7 +406,7 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
     // Identify failed node(s) and remove them from key_node_map
     // Create new replicas for lost data
     // Notify the client about updated key-node mappings
-    cout << "Handling node failure and re-replication for node " << failed_node.ip << ":" << failed_node.port << endl;
+    cout << "NODE_FAILURE: Handling node failure and re-replication for node " << failed_node.ip << ":" << failed_node.port << endl;
 
     lock_guard<mutex> lock(mtx);
     // Handle node failure and remove it from vacant storage
@@ -524,7 +459,7 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
 
                 // Send key-value data to new node
                 if (nodes.size() == 1){
-                    cerr<<"THERE's No replica node to reference! Data Lost!";
+                    cerr<<"NODE_FAILURE: THERE's No replica node to reference! Data Lost!";
                     return;
                 }
                 
@@ -554,7 +489,7 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
                     cerr << "Error retrieving value from existing storage node" << endl;
                     continue;
                 }
-                value_buffer[bytes_read] = '\0';
+
 
                 // Send PUT request to new node
                 int new_node_socket = socket(AF_INET, SOCK_STREAM, 0);
@@ -569,7 +504,14 @@ void GTStoreManager::re_replicate(NodeAddress failed_node) {
                     continue;
                 }
 
-                string put_request = "PUT " + key + " " + string(value_buffer);
+                string request(value_buffer);
+                istringstream iss(request);
+                string id;
+                iss >> id;
+                std::string value;
+                std::getline(iss >> std::ws, value); 
+
+                string put_request = "PUT " + key + " " + value;
                 send(new_node_socket, put_request.c_str(), put_request.size(), 0);
                 close(new_node_socket);
             } else {

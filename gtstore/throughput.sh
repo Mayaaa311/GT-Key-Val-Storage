@@ -3,7 +3,7 @@
 make clean
 make
 
-./start_service --nodes 7 --rep 1 & 
+./bin/start_service --nodes 7 --rep 1 & 
 SERVICE_PID=$!
 sleep 10
 # Launch the client testing app

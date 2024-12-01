@@ -69,7 +69,6 @@ class GTStoreManager {
 		void re_replicate(NodeAddress failed_node);
 		vector<pid_t> forked_processes;
 		int flag;
-		int tcp_socket;
 		int client_tcp_socket;
 		int udp_socket;
 		NodeAddress select_node();
@@ -87,7 +86,6 @@ class GTStoreStorage {
 			int storage_id;
 			int tcp_socket;
 			mutex mtx;  // Mutex for thread safety
-			int running;
 		public:
 				/**
 				 * 1. fork a process to start storage
